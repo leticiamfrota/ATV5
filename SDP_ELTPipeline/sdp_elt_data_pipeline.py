@@ -252,15 +252,101 @@ def tansform_raw_dataset(dataset_file_path: str=None) -> None:
     Returns:
         transformed_file_path (str): O caminho para o dataset transformado.  
     """
+    if not dataset_file_path:
+        logging.error("Nenhum caminho de arquivo de dataset bruto fornecido para transformação.")
+        return ""
+
     transformed_file_path = dataset_file_path.replace("raw", "trf")
 
-    # Escreva seu código aqui. Use o pandas para fazer essa tarefa
-    # Ao final, salve as alterações em um arquivo como o neme contido em transformed_file_path 
+    try:
+        df = pd.read_csv(dataset_file_path, sep=";", encoding='utf-8')
+        logging.info(f"Dataset bruto carregado com {len(df)} linhas.")
+
+        initial_rows = len(df)
+
+        irrelevant_patterns = [
+            r'[Tt]est',
+            r'[Ee]xample',
+        ]
+        combined_pattern = '|'.join(irrelevant_patterns)
+
+        df_filtered_irrelevant = df[~df['FILE'].str.contains(combined_pattern, case=False, na=False)].copy()
+        
+        logging.info(f"Removidas {initial_rows - len(df_filtered_irrelevant)} linhas de arquivos irrelevantes. Restantes: {len(df_filtered_irrelevant)}")
+        df = df_filtered_irrelevant
+
+        initial_rows = len(df)
+
+        metric_columns = ['LOC', 'COM', 'BLK', 'NOF', 'NOC', 'APF', 'AMC', 'NER', 'NEH', 'CYC', 'MAD']
+        
+        existing_metric_columns = [col for col in metric_columns if col in df.columns]
+        
+        if not existing_metric_columns:
+            logging.warning("Nenhuma coluna de métrica válida encontrada para processamento de zeros.")
+        else:
+            zero_threshold_percentage = 0.8
+            
+            for col in existing_metric_columns:
+                if not pd.api.types.is_numeric_dtype(df[col]):
+                    logging.warning(f"Coluna '{col}' não é numérica, excluindo da contagem de zeros.")
+                    existing_metric_columns.remove(col) 
+            
+            if existing_metric_columns:
+                df['num_zeros'] = (df[existing_metric_columns] == 0).sum(axis=1)
+                df['total_metrics'] = len(existing_metric_columns)
+                df['percentage_zeros'] = df['num_zeros'] / df['total_metrics']
+                
+                df_filtered_zeros = df[df['percentage_zeros'] <= zero_threshold_percentage].copy()
+                
+                logging.info(f"Removidas {initial_rows - len(df_filtered_zeros)} linhas com maioria de métricas zeradas. Restantes: {len(df_filtered_zeros)}")
+                df = df_filtered_zeros.drop(columns=['num_zeros', 'total_metrics', 'percentage_zeros']) # Remove colunas auxiliares
+                initial_rows = len(df) # Atualiza o contador de linhas
+            else:
+                logging.warning("Após a verificação de tipo, nenhuma coluna métrica numérica restante para processar zeros.")
+
+
+
+        current_rows_after_outlier_removal = len(df)
+        for col in existing_metric_columns:
+            if not df[col].empty: 
+                Q1 = df[col].quantile(0.25)
+                Q3 = df[col].quantile(0.75)
+                IQR = Q3 - Q1
+                
+                # Definir limites para outliers
+                lower_bound = Q1 - 1.5 * IQR
+                upper_bound = Q3 + 1.5 * IQR
+                
+                df_filtered_outliers_col = df[(df[col] >= lower_bound) & (df[col] <= upper_bound)].copy()
+                
+                removed_count = len(df) - len(df_filtered_outliers_col)
+                if removed_count > 0:
+                    logging.info(f"Removidos {removed_count} outliers na coluna '{col}'.")
+                df = df_filtered_outliers_col 
+                
+            else:
+                logging.warning(f"Coluna '{col}' está vazia, pulando detecção de outlier para esta coluna.")
+
+        if current_rows_after_outlier_removal - len(df) > 0:
+            logging.info(f"Total de linhas restantes após remoção de outliers: {len(df)}")
+        else:
+            logging.info("Nenhum outlier significativo removido ou DataFrame já vazio.")
+
+
+        df.to_csv(transformed_file_path, sep=';', index=False, quoting=csv.QUOTE_MINIMAL, encoding='utf-8')
+        logging.info(f"Dataset transformado salvo em: {transformed_file_path} com {len(df)} linhas.")
+
+    except FileNotFoundError:
+        logging.error(f"Erro: O arquivo '{dataset_file_path}' não foi encontrado.")
+        return ""
+    except Exception as e:
+        logging.error(f"Erro durante a transformação do dataset: {e}")
+        return ""
 
     return transformed_file_path
 
 def start():
-    token = "Coloque seu Token de Desenvolvedor GitHub Aqui"
+    token = "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"
     
     logger = logging.getLogger(__name__)
     logging.basicConfig(filename='pipeline.log', encoding='utf-8', level=logging.DEBUG)
